@@ -1,0 +1,415 @@
+---
+title: "S-Monitor 2019 (Baden-Württemberg)"
+runtime: shiny
+output:
+  flexdashboard::flex_dashboard:
+    orientation: row
+    vertical_layout: fill
+    theme: simplex
+    social:
+    - twitter
+    - linkedin
+    graphics: yes
+    fig_mobile: FALSE
+
+resource_files:
+- Gemeindegrenzen_2017_mit_Einwohnerzahl.cpg
+- Gemeindegrenzen_2017_mit_Einwohnerzahl.dbf
+- Gemeindegrenzen_2017_mit_Einwohnerzahl.prj
+- Gemeindegrenzen_2017_mit_Einwohnerzahl.shx
+---
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+library(sf)
+library(raster)
+library(rgdal)
+library(ggplot2)
+library(dplyr)
+library(ggthemes)
+library(rmapshaper)
+library(ggrepel)
+library(scales)
+library(gghighlight)
+library(gridExtra)
+library(ggiraph)
+library(shiny)
+library(htmlwidgets)
+library(ggpubr)
+library(tidyr)
+library(wesanderson)
+library(kableExtra)
+```
+
+```{r, include = FALSE}
+
+raw_data <- st_read("Gemeindegrenzen_2017_mit_Einwohnerzahl.shp")
+
+y <- select(raw_data, FID, RS, AGS, SDV_RS, GEN, BEZ, IBZ, BEM, SN_L,EWZ)
+
+BaWü <- filter(y, SN_L == "08")
+
+merge = read.csv("Sparkassen_BaWu_V1.csv", header = TRUE, sep = ";", dec = ",",encoding = "UTF-8")
+
+df = cbind(BaWü, merge$Sparkasse, merge$Indikator, merge$Kürzel, merge$Zinsüberschuss, 
+           merge$Provisionsüberschuss, merge$Sonstige.Erträge, merge$Ertragsposition, merge$Personalaufwand,
+           merge$Andere.Verwaltungsaufwand, merge$Sonstige.Aufwendungen, merge$Aufwandsposition,
+           merge$Jahresüberschuss.vor.Steuern, merge$Ergebnis.der.normalen.Geschäftstätigkeit,
+           merge$Bilanzsumme)
+
+df = subset(df, df$merge.Kürzel != "LBBW" & df$merge.Kürzel != "Keine SK")
+
+data = group_by(df, df$merge.Kürzel, df$merge.Sparkasse) %>%
+  summarise(Provisionsüberschuss = mean(merge.Provisionsüberschuss), Zinsüberschuss = mean(merge.Zinsüberschuss),
+            SonstigeErträge = mean(merge.Sonstige.Erträge), Personalaufwand = mean(merge.Personalaufwand),
+            AndereVerwaltungsaufwendungen = mean(merge.Andere.Verwaltungsaufwand), 
+            SonstigeAufwendungen = mean(merge.Sonstige.Aufwendungen),
+            Jahresüberschuss = mean(merge.Jahresüberschuss.vor.Steuern), Ergebnis = mean(merge.Ergebnis.der.normalen.Geschäftstätigkeit),
+            Bilanzsumme = mean(merge.Bilanzsumme), do_union =TRUE)
+
+
+
+data = ms_simplify(data, keep = 0.009, keep_shapes = TRUE) 
+
+names(data)[1] <- "id-1"
+names(data)[2] <- "id"
+names(data)[5] <- "Sonstige Erträge"
+names(data)[7] <- "Andere Verwaltungsaufwendungen"
+names(data)[8] <- "Sonstige Aufwendungen"
+names(data)[10] <- "Ergebnis der normalen Geschäftstätigkeit"
+
+
+#Visualizing
+label_points <- st_centroid(data)
+label_points <- cbind(data, st_coordinates(st_centroid(data$geometry)))
+
+#table
+df_rank = cbind(data, rank(-data$Provisionsüberschuss), rank(-data$Zinsüberschuss), rank(-data$'Sonstige Erträge'), rank(data$Personalaufwand) ,rank(data$'Andere Verwaltungsaufwendungen'), rank(data$'Sonstige Aufwendungen'), rank(-data$Jahresüberschuss), rank(-data$'Ergebnis der normalen Geschäftstätigkeit'))
+
+
+
+names(df_rank)[5] <- "Sonstige Erträge"
+names(df_rank)[7] <- "Andere Verwaltungsaufwendungen"
+names(df_rank)[8] <- "Sonstige Aufwendungen"
+names(df_rank)[10] <- "Ergebnis der normalen Geschäftstätigkeit"
+```
+
+
+
+Monitoring 
+=======================================================================
+
+
+Auswahlcockpit {.sidebar}
+-----------------------------------------------------------------------
+```{r}
+
+tags$style(type='text/css', ".selectize-input {font-size: 9px; line-height: 20px,}
+.selectize-dropdown {font-size: 9px; line-height: 20px}
+body{font-size: 9px;line-height: 20px}
+.chart-title{font-size: 11px}")
+
+selectInput("SparkasseNum", label = h3("Sparkasse", style = "font-size:12px"), 
+    choices = data$id, 
+    selected = "Bezirkssparkasse Reichenau")
+
+div(style = "margin-top:-10px")
+```
+
+<p>Wählen Sie eine Sparkasse aus dem Sparkassenverband Baden-Württemberg (SVBW), um Informationen zur ausgewählten Sparkasse hervorzuheben. </p>
+
+
+```{r}
+selectInput("SK", label = h3("Geschäftsgebiet & Rangliste SVBW", style = "font-size:12px"), 
+    choices = c("Zinsüberschuss", "Provisionsüberschuss", "Sonstige Erträge", "Personalaufwand", "Andere Verwaltungsaufwendungen", "Sonstige Aufwendungen", "Jahresüberschuss", "Ergebnis der normalen Geschäftstätigkeit"), 
+    selected = "Zinsüberschuss")
+
+div(style = "margin-top:-10px")
+
+
+```
+
+<p>  Wählen Sie eine GuV-Position aus, um sich die Verteilung der Position im SVBW anzeigen zu lassen. Die Top/ Flops und Mittelwerte im SVBW zur Position sind im Ranglistenauszug dargestellt. </p>
+
+
+
+```{r}
+  selectInput("data1", label = h3("Abhängigkeitsstrukturen", style = "font-size:12px"), 
+    choices =  c("Zinsüberschuss", "Provisionsüberschuss", "Sonstige Erträge", "Personalaufwand", "Andere Verwaltungsaufwendungen", "Sonstige Aufwendungen", "Jahresüberschuss", "Ergebnis der normalen Geschäftstätigkeit"), 
+    selected = "Zinsüberschuss")  
+  
+  div(style = "margin-top:-45px")
+  
+  selectInput("data2", label = h3("", style = "font-size:12px"), 
+    choices =  c("Zinsüberschuss", "Provisionsüberschuss", "Sonstige Erträge", "Personalaufwand", "Andere Verwaltungsaufwendungen", "Sonstige Aufwendungen", "Jahresüberschuss", "Ergebnis der normalen Geschäftstätigkeit"),
+    selected = "Zinsüberschuss") 
+  
+  div(style = "margin-top:-10px")
+```
+
+<p>  Wählen Sie GuV-Positionen, um ein Streudiagramm zu erstellen. Für die Auswahl der x-Achse verwenden Sie das obere Drop-Down Menü. Für die Auswahl der y-Achse wählen Sie aus dem unterem Drop-Down Menü.</p>
+
+
+Column {data-width=350}
+-----------------------------------------------------------------------
+
+
+### Geschäftsgebiet der Sparkassen im SVBW
+
+```{r}
+
+
+label = tags$em("my label")
+
+renderggiraph({
+  
+  g <- ggplot() +
+        geom_sf_interactive(data = data, size = 0.1, color = "white", aes(fill = get(input$SK),
+  tooltip =  sprintf("%s<br/>%s", id , paste(input$SK, percent(get(input$SK), accuracy = 0.001L, family="Helvetica"))), data_id = id)) +
+    coord_sf(xlim=c(min(label_points$X - 190000),max(label_points$X + 260000)), ylim=c(min(label_points$Y - 1000), max(label_points$Y +20000)) ) +
+      geom_text_repel(data = data ,aes(x=label_points$X, y=label_points$Y, label = ifelse(id == input$SparkasseNum, input$SparkasseNum,""), family="Helvetica"), nudge_x = -42001071, nudge_y = 210000, segment.curvature = -0.2, segment.ncp = 3, segment.angle = 20, arrow = arrow(length = unit(0.01, "npc"))) +
+scale_fill_viridis_c("in % der \n Bilanzsumme", option = "magma", labels = percent, begin =0.3, end =0.9, guide = "coloursteps") +
+        theme_map() +
+        theme(legend.title = element_text(color = "black", size = 7, family="Helvetica"), legend.text = element_text(color = "black", size = 7, family="Helvetica"), legend.position = c(0.8, 0.3), legend.justification = c(0,0), legend.direction = "vertical") +
+        theme(legend.background = element_rect(linetype = 1, size = 0.3, colour = 1))
+  
+girafe(ggobj = g, width_svg =6.5, height_svg = 2.9, 
+       options = list(
+         opts_sizing(rescale = TRUE),
+         opts_selection(type = "single", only_shiny = FALSE),
+         opts_hover_inv(css = "opacity:0.5"),
+         opts_hover(css = "stroke:darkgray;stroke-width:1.5;stroke-linecap:square;stroke-linejoin:miter;"), 
+         opts_tooltip(css = "background-color:white;color:black;padding:10px;border:solid;border-width:0.4px"),
+         sizingPolicy = htmlwidgets::sizingPolicy(
+   viewer.suppress = TRUE,
+             knitr.figure = FALSE,
+             browser.fill = TRUE,
+             browser.padding = 75,
+             knitr.defaultWidth = 800,
+             knitr.defaultHeight = 500
+  )
+       ))
+  })
+
+```
+
+### Ranglistenauszug SVBW
+
+```{r}
+                
+#table
+
+st_geometry(df_rank) <- NULL
+
+
+tab1<-  reactive({
+
+  if (req(input$SK) == "Personalaufwand" | req(input$SK) == "Andere Verwaltungsaufwendungen" | req(input$SK) == "Sonstige Aufwendungen")
+    {
+df_rank %>%
+    arrange(get(input$SK)) %>%
+  select(id, input$SK, (which(colnames(df_rank) == (input$SK)) +9)) %>%
+    slice_head(n = 3) 
+    }
+  else
+{
+  df_rank %>%
+    arrange(desc(get(input$SK))) %>%
+  select(id, input$SK, (which(colnames(df_rank) == (input$SK)) +9)) %>%
+    slice_head(n = 3)
+   }
+})
+
+tab2<-  reactive({
+
+  if (req(input$SK) == "Personalaufwand" | req(input$SK) == "Andere Verwaltungsaufwendungen" | req(input$SK) == "Sonstige Aufwendungen")
+    {
+df_rank %>%
+    arrange(get(input$SK)) %>%
+  select(id, input$SK, (which(colnames(df_rank) == (input$SK)) +9)) %>%
+    slice_tail(n = 3) 
+    }
+  else
+{df_rank %>%
+    arrange(desc(get(input$SK))) %>%
+  select(id, input$SK, (which(colnames(df_rank) == (input$SK)) +9)) %>%
+    slice_tail(n = 3)
+   }
+})
+
+renderTable({
+  
+  
+ df <- rbind.data.frame(tab1(),
+c("Mittelwert SVBW", mean(data[[input$SK]]), "-"),
+tab2())
+ 
+colnames(df)[1] <- "Sparkasse"
+colnames(df)[3] <- "Rang"
+
+df[,2] <-percent(as.numeric(df[,2]), accuracy = 0.001)
+ 
+df
+  
+  
+  })
+```
+
+Column {data-width=400}
+-----------------------------------------------------------------------
+
+
+### Abhängigkeitsstrukturen
+
+
+```{r}
+
+
+
+
+renderPlot({
+  
+    ggplot(data= data, aes(x=get(input$data1), y=get(input$data2), label=ifelse(id == input$SparkasseNum, input$SparkasseNum,""))) +
+    geom_point(colour = "black", size = 3.5, shape =17) +
+  geom_point(colour = "pink", size = 2.0, shape =17) +
+    geom_text_repel(nudge_x = -.0025,nudge_y = 0.0001, box.padding = 0.025, segment.curvature = -0.1, segment.ncp = 3, segment.angle = 20, arrow = arrow(length = unit(0.015, "npc"))) + scale_fill_manual(values = wes_palette("FantasticFox1",n =3)) +
+    theme_minimal() +
+    theme(plot.title = element_text(color="black", size=14, family =""), plot.subtitle = element_text(color="black", size=12, family ="")) +
+    theme(legend.title = element_text(color = "black", size = 8), legend.text = element_text(color = "black", size = 8), legend.position = c(0.5, 0), legend.justification = c(0.5,0.75), legend.direction = "horizontal") +
+  theme(legend.background = element_rect(linetype = 1, size = 0.3, colour = 1)) +
+    labs(y= input$data2, x = input$data1) + 
+    scale_y_continuous(labels = scales::percent) +
+  scale_x_continuous(labels = scales::percent)
+
+})
+#position=position_jitter(width=.005,height=0.005)
+
+```
+
+
+
+Über das Projekt {data-orientation=rows}
+=======================================================================
+
+
+Über mich {.sidebar}
+-----------------------------------------------------------------------
+```{r}
+
+tags$style(type='text/css', "
+h3{font-size: 12px;line-height: 13
+px}")
+```
+
+### Author
+
+***
+
+
+```{r, echo= FALSE ,out.width = '60%', fig.align="center", out.extra='style="border-radius: 100px;margin-right: 15%;margin-left: 15%;"'}
+
+img1 <- "Testbild.png"
+knitr::include_graphics(img1)
+ 
+```
+
+***
+
+Pascal Frick,            
+M. Sc. Economics and Business Administration,
+Consultant
+
+*** 
+
+<a href="https://twitter.com/fitzfritzdata" class="fa fa-twitter" style="color: grey;"></a>
+
+
+*** 
+
+Disclaimer: Für Richtigkeit, Vollständigkeit und Aktualität kann keine Haftung übernommen werden. 
+
+
+###  Author{.mobile}
+
+
+Pascal Frick,            
+M. Sc. Economics and Business Administration,
+Consultant
+
+*** 
+
+<a href="https://twitter.com/fitzfritzdata" class="fa fa-twitter" style="color: grey;"></a>
+
+
+*** 
+
+Disclaimer: Für Richtigkeit, Vollständigkeit und Aktualität kann keine Haftung übernommen werden. 
+
+
+
+
+
+Column {style = "height=100pc"}
+-----------------------------------------------------------------------
+
+### Projekthintergrund S-Monitor {data-width=400}
+
+Weil's um mehr als Geld geht. Oder auch nicht!
+
+Die deutschen Sparkassen verwalten Kundeneinlagen von knapp 1.100 Mrd. EUR, was einem Marktanteil von knapp 31% entspricht. (Zum Vergleich Genossenschaftsbanken und Großbanken weisen einen Marktanteil von knapp 22% respektive 21% auf.)$^{1}$ Damit sind die Sparkassen mit deutlichen Abstand Marktführer in Deutschland. Sparkassen erscheinen nach außen oftmals als einheitliche Bank, dennoch unterscheiden sich die lokalen Institute deutlich in ihrer Wirtschaftlichkeit.
+
+Dieses Dashboard beleuchtet die aktuelle Ergebnissituation der baden-württembergischen Sparkassen und stellt die Lage der Institute transparent dar. Meines Wissens ist dies das erste Dashboard, dass die Ergebnissituation eines Verbandes auf Einzelinstitutesebene umfassend zur Verfügung stellt.
+
+
+***
+
+1 Janßen, I. (2021, 1. Juni). Betrieb & Banksteuerung BBL_Geschäfts- und Marktanteilsentwicklung 2020. Sparkassenzeitung. ht<span>tps://www.sparkassenzeitung.de/betrieb-banksteuerung/bblgeschaefts-und-marktanteilsentwicklung-2020-rekordwachstum-bei-krediten
+
+```{r}
+
+
+```
+
+
+### Methodik und Vorgehen {data-width=400}
+
+Die Darstellung des Geschäftsgebietes basiert auf Angaben der Sparkassen, sowie Geo-Daten aus Google Maps. Das zugrundelegende Kartenmaterial basiert auf dem ESRI Shapefile VG250 Gemeindegrenzen.
+
+Zur Analyse der Ergebnissituation wurden die Jahresabschlüsse der Institute mittels einer selbstentwickelten Bilanzanalyse automatisiert ausgelesen. Die Kennzahlen setzen sich aus den entsprechenden GuV-Positionen der Jahresabschlüsse zusammen und wurden zwecks Vergleichbarkeit über die Bilanzsummen der Institute normiert.
+
+Für die Erstellung wurde die Statistiksprache R verwendet. Eine Reihe von Erweiterung wurden zur Erstellung dieser Seite verwendet. Nachfolgend die Übersicht der wichtigsten genutzten Erweiterungen.
+
+***
+
+R Core Team (2020). R: A language and environment for statistical
+  computing. R Foundation for Statistical Computing, Vienna, Austria.
+  URL  ht<span>tps://www.R-project.org/.
+  
+RStudio Team (2020). RStudio: Integrated Development for R. RStudio, PBC, Boston, MA URL  ht<span>tp://www.rstudio.com/.
+
+JJ Allaire and Yihui Xie and Jonathan McPherson and Javier Luraschi
+  and Kevin Ushey and Aron Atkins and Hadley Wickham and Joe Cheng and
+  Winston Chang and Richard Iannone (2021). rmarkdown: Dynamic
+  Documents for R. R package version 2.7. URL
+  ht<span>tps://rmarkdown.rstudio.com.
+  
+Winston Chang, Joe Cheng, JJ Allaire, Carson Sievert, Barret
+  Schloerke, Yihui Xie, Jeff Allen, Jonathan McPherson, Alan Dipert and
+  Barbara Borges (2021). shiny: Web Application Framework for R. R
+  package version 1.6.0. ht<span>tps://CRAN.R-project.org/package=shiny
+  
+David Gohel and Panagiotis Skintzos (2021). ggiraph: Make 'ggplot2'
+  Graphics Interactive. R package version 0.7.10.
+  ht<span>tps://CRAN.R-project.org/package=ggiraph
+  
+Richard Iannone, JJ Allaire and Barbara Borges (2020). flexdashboard:
+  R Markdown Format for Flexible Dashboards. R package version 0.5.2.
+  ht<span>tps://CRAN.R-project.org/package=flexdashboard
+
+Pebesma, E., 2018. Simple Features for R: Standardized Support for
+  Spatial Vector Data. The R Journal 10 (1), 439-446,
+  ht<span>tps://doi.org/10.32614/RJ-2018-009
+  
+H. Wickham. ggplot2: Elegant Graphics for Data Analysis.
+  Springer-Verlag New York, 2016.
+  
