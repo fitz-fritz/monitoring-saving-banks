@@ -20,6 +20,9 @@ resource_files:
 ---
 
 ```{r setup, include=FALSE}
+packageurl <- "http://cran.r-project.org/src/contrib/Archive/rmapshaper/rmapshaper_0.4.0.tar.gz "
+install.packages(packageurl, repos=NULL, type="source")
+
 library(flexdashboard)
 library(sf)
 library(raster)
